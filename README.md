@@ -1,9 +1,9 @@
 AWS Reactive Auto Scaling
 =========================
 
-Depends on consul to orchestrate only running this on one instance of a cluster.
+Depends on consul to orchestrate only running this on one instance of an autoscaling group
 
-Current semi-naive scaling calculation:
+Current scaling calculation:
 - If the CPU percentage is over 90% double the size of the cluster
 - Else If the CPU percentage is over 60% add an instance to the cluster
 - Else If removing an instance would not put the cpu usage over the limit then remove an instance
