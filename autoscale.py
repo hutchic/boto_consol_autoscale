@@ -44,32 +44,44 @@ class AutoScale(object):
         with open(config_filepath, 'w') as config:
             json.dump(cls.empty_config_data, config, indent=4)
 
+    def consul_lock(func):
+        def func_wrapper(*args):
+            consul = args[0].consul;
+            asg_name = args[0].asg_name;
+            session_id = consul.session.create(asg_name);
+            if consul.kv.acquire_lock(asg_name + '/lock', session_id):
+                try:
+                    func(*args)
+                except:
+                    consul.kv.release_lock(asg_name + '/lock', session_id);
+                    raise;
+            consul.kv.release_lock(asg_name + '/lock', session_id);
+        return func_wrapper;
+
+    @consul_lock
     def run(self):
-        session_id = self.consul.session.create(self.asg_name);
-        if self.consul.kv.acquire_lock(self.asg_name + '/lock', session_id):
-            system_data = self.get_system_data();
-            client = boto3.setup_default_session(region_name=self.region_name);
-            client = boto3.client('autoscaling', aws_access_key_id=self.AWS_ACCESS_KEY_ID,
-                aws_secret_access_key=self.AWS_SECRET_ACCESS_KEY_ID);
-            asg = client.describe_auto_scaling_groups(AutoScalingGroupNames=[
-                self.asg_name
-            ])['AutoScalingGroups'][0]
+        system_data = self.get_system_data();
+        client = boto3.setup_default_session(region_name=self.region_name);
+        client = boto3.client('autoscaling', aws_access_key_id=self.AWS_ACCESS_KEY_ID,
+            aws_secret_access_key=self.AWS_SECRET_ACCESS_KEY_ID);
+        asg = client.describe_auto_scaling_groups(AutoScalingGroupNames=[
+            self.asg_name
+        ])['AutoScalingGroups'][0]
 
-            scale_amount = 0;
-            """
-            Anything greater than 90% could require doubline or more
-            otherwise just make incremental changes
-            """
-            if system_data['cpu_percent'] > 90:
-                scale_amount = len(asg['Instances']) * 2;
-            elif system_data['cpu_percent'] > this.cpu_upper_limit:
-                scale_amount = len(asg['Instances']) + 1;
-            elif len(asg['Instances']) > 2 and self.should_scale_down(system_data, len(asg['Instances'])):
-                scale_amount = len(asg['Instances']) - 1;
+        scale_amount = 0;
+        """
+        Anything greater than 90% could require doubline or more
+        otherwise just make incremental changes
+        """
+        if system_data['cpu_percent'] > 90:
+            scale_amount = len(asg['Instances']) + 1 * 2;
+        elif system_data['cpu_percent'] > self.cpu_upper_limit:
+            scale_amount = len(asg['Instances']) + 1;
+        elif len(asg['Instances']) > 2 and self.should_scale_down(system_data, len(asg['Instances'])):
+            scale_amount = len(asg['Instances']) - 1;
 
-            if scale_amount != 0:
-                update_asg(client, asg, scale_amount);
-            self.consul.kv.release_lock(self.asg_name + '/lock', session_id)
+        if scale_amount != 0:
+            self.update_asg(client, asg, scale_amount);
 
     def update_asg(self, client, asg, scale_amount):
         asg['DesiredCapacity'] = scale_amount;
