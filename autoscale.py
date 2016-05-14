@@ -2,6 +2,7 @@
 
 import os
 import json
+import time
 import boto3
 import psutil
 import urllib2
@@ -14,14 +15,16 @@ class AutoScale(object):
     empty_config_data = {
         "region_name": "us-east-1",
         "asg_name": "PLEASE FILL THIS OUT",
+        "service_name": "SERVICE AS REGISTERED IN CONSUL"
         "AWS_ACCESS_KEY_ID": "PLEASE FILL THIS OUT",
         "AWS_SECRET_ACCESS_KEY_ID": "PLEASE FILL THIS OUT"
     }
 
-    def __init__(self, asg_name, region_name,
+    def __init__(self, asg_name, region_name, service_name
             AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY_ID):
         self.asg_name = asg_name;
         self.region_name = region_name;
+        self.service_name = service_name;
         self.AWS_ACCESS_KEY_ID = AWS_ACCESS_KEY_ID;
         self.AWS_SECRET_ACCESS_KEY_ID = AWS_SECRET_ACCESS_KEY_ID;
         self.consul = consulate.Consul();
@@ -50,11 +53,27 @@ class AutoScale(object):
             asg_name = args[0].asg_name;
             session_id = consul.session.create(asg_name);
             if consul.kv.acquire_lock(asg_name + '/lock', session_id):
+                instanceid = urllib2.urlopen('http://169.254.169.254/latest/meta-data/instance-id').read();
+                boto3.client('ec2', aws_access_key_id=args[0].AWS_ACCESS_KEY_ID,
+                    aws_secret_access_key=args[0].AWS_SECRET_ACCESS_KEY_ID).modify_instance_attribute(
+                    InstanceId=instanceid,
+                    DisableApiTermination={'Value': True}
+                );
                 try:
                     func(*args)
                 except:
+                    boto3.client('ec2', aws_access_key_id=args[0].AWS_ACCESS_KEY_ID,
+                        aws_secret_access_key=args[0].AWS_SECRET_ACCESS_KEY_ID).modify_instance_attribute(
+                        InstanceId=instanceid,
+                        DisableApiTermination={'Value': False}
+                    );
                     consul.kv.release_lock(asg_name + '/lock', session_id);
                     raise;
+            boto3.client('ec2', aws_access_key_id=args[0].AWS_ACCESS_KEY_ID,
+                aws_secret_access_key=args[0].AWS_SECRET_ACCESS_KEY_ID).modify_instance_attribute(
+                InstanceId=instanceid,
+                DisableApiTermination={'Value': False}
+            );
             consul.kv.release_lock(asg_name + '/lock', session_id);
         return func_wrapper;
 
@@ -80,7 +99,10 @@ class AutoScale(object):
         elif len(asg['Instances']) > 2 and self.should_scale_down(system_data, len(asg['Instances'])):
             scale_amount = len(asg['Instances']) - 1;
 
-        if scale_amount != 0:
+        """
+        If scaling down protect this instance from termination
+        """
+        if scale_amount != 0
             self.update_asg(client, asg, scale_amount);
 
     def update_asg(self, client, asg, scale_amount):
@@ -92,6 +114,10 @@ class AutoScale(object):
             DesiredCapacity=asg['DesiredCapacity'],
             MaxSize=asg['MaxSize']
         );
+        registered_services = self.consul.catalog.service(self.service_name);
+        while len(registered_services) != scale_amount:
+            time.sleep(5);
+            registered_services = self.consul.catalog.service(self.service_name);
 
     def should_scale_down(self, system_data, asg_instance_count):
         """
